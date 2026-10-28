@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>dreams</title>
+<meta name="description" content="Jonathan Tari's dreams.">
+<meta name="theme-color" content="#4f97dc">
+<style>
+  html, body { margin: 0; height: 100%; background: #6fb3ea; overflow: hidden; }
+  canvas { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<h1 class="sr">dreams</h1>
+<canvas id="c" aria-hidden="true"></canvas>
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("c");
+  var ctx = canvas.getContext("2d");
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  var MIN = 120;          // shortest side, in logical pixels
+  var SKY_KEYS = [[74, 144, 217], [110, 178, 234], [201, 230, 248]];
+  var SKY = (function () {
+    var out = [], n = 12;
+    for (var i = 0; i < n; i++) {
+      var t = i / (n - 1) * (SKY_KEYS.length - 1), k = Math.min(SKY_KEYS.length - 2, Math.floor(t)), f = t - k;
+      var a = SKY_KEYS[k], b = SKY_KEYS[k + 1];
+      out.push("rgb(" + [0, 1, 2].map(function (j) { return Math.round(a[j] + (b[j] - a[j]) * f); }).join(",") + ")");
+    }
+    return out;
+  })();
+  var BAYER = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+  var CLOUD = { hi: "#ffffff", body: "#f2f7fc", shade: "#d6e5f2", edge: "#bcd2e6" };
+
+  var W, H, scale, sky = document.createElement("canvas");
+  var layers = [];
+
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+
+  // Build one cloud as a little pixel sprite: a flat-bottomed pile of puffs.
+  function makeCloud(w) {
+    var h = Math.round(w * rnd(0.42, 0.52));
+    var base = h - 1;
+    var mask = [];
+    for (var y = 0; y < h; y++) { mask.push(new Array(w).fill(0)); }
+    // puffs sit on a flat baseline; the middle ones are tallest
+    var puffs = [];
+    var n = Math.max(3, Math.round(w / 9));
+    for (var i = 0; i < n; i++) {
+      var t = (i + rnd(0.35, 0.65)) / n;
+      var bell = Math.pow(Math.sin(Math.PI * t), 1.2);
+      var r = Math.max(2, Math.round(h * (0.18 + 0.42 * bell) * rnd(0.7, 1.15)));
+      puffs.push({ x: Math.round(w * 0.1 + w * 0.8 * t), y: base - Math.round(r * rnd(0.1, 0.3)), r: r });
+    }
+    // a couple of smaller puffs stacked on top for that lumpy cumulus look
+    var tops = Math.max(1, Math.round(w / 22));
+    for (var k = 0; k < tops; k++) {
+      var tt = rnd(0.3, 0.7);
+      var rr = Math.max(2, Math.round(h * rnd(0.25, 0.38)));
+      puffs.push({ x: Math.round(w * tt), y: Math.round(h * rnd(0.32, 0.45)), r: rr });
+    }
+    for (var yy = 0; yy < h; yy++) {
+      for (var xx = 0; xx < w; xx++) {
+        for (var p = 0; p < puffs.length; p++) {
+          var dx = xx - puffs[p].x, dy = yy - puffs[p].y;
+          if (dx * dx + dy * dy < puffs[p].r * puffs[p].r) { mask[yy][xx] = 1; break; }
+        }
+      }
+    }
+    var c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    var g = c.getContext("2d");
+    for (var y2 = 0; y2 < h; y2++) {
+      for (var x2 = 0; x2 < w; x2++) {
+        if (!mask[y2][x2]) continue;
+        var above = y2 > 0 && mask[y2 - 1][x2];
+        var below = y2 < h - 1 && mask[y2 + 1][x2];
+        var left = x2 > 0 && mask[y2][x2 - 1];
+        var right = x2 < w - 1 && mask[y2][x2 + 1];
+        var col = CLOUD.body;
+        if (!above || (!left && y2 < h * 0.6)) col = CLOUD.hi;          // light from the top-left
+        else if (!below) col = CLOUD.edge;
+        else if (!right && y2 > h * 0.4) col = CLOUD.shade;
+        else if (y2 > h * 0.74) col = ((x2 + y2) % 2 === 0 && y2 < h * 0.84) ? CLOUD.body : CLOUD.shade;
+        g.fillStyle = col;
+        g.fillRect(x2, y2, 1, 1);
+      }
+    }
+    return c;
+  }
+
+  function paintSky() {
+    sky.width = W; sky.height = H;
+    var g = sky.getContext("2d");
+    for (var y = 0; y < H; y++) {
+      var t = y / Math.max(1, H - 1) * (SKY.length - 1);
+      var i = Math.floor(t), f = t - i;
+      for (var x = 0; x < W; x++) {
+        // 4x4 ordered dither between neighbouring bands
+        var th = (BAYER[y % 4][x % 4] + 0.5) / 16;
+        g.fillStyle = (f > th && i + 1 < SKY.length) ? SKY[i + 1] : SKY[i];
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+
+  function spawn(layer, anywhere) {
+    var w = Math.round(rnd(layer.min, layer.max));
+    var spr = makeCloud(w);
+    return {
+      spr: spr,
+      x: anywhere ? rnd(-w, W) : W + rnd(2, W * 0.4),
+      y: Math.round(rnd(layer.top * H, layer.bottom * H - spr.height)),
+      v: layer.speed * rnd(0.85, 1.15)
+    };
+  }
+
+  function layout() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var s = Math.min(vw, vh) / MIN;
+    scale = s >= 3 ? Math.floor(s) : s;
+    W = Math.ceil(vw / scale); H = Math.ceil(vh / scale);
+    canvas.width = W; canvas.height = H;
+    canvas.style.width = W * scale + "px";
+    canvas.style.height = H * scale + "px";
+    paintSky();
+
+    // far → near: smaller, slower, fainter clouds at the back
+    layers = [
+      { min: 14, max: 24, speed: 0.35, alpha: 0.55, top: 0.04, bottom: 0.6, count: Math.max(2, Math.round(W * H / 5000)) },
+      { min: 24, max: 40, speed: 0.7, alpha: 0.8, top: 0.08, bottom: 0.8, count: Math.max(2, Math.round(W * H / 7500)) },
+      { min: 38, max: 64, speed: 1.2, alpha: 1, top: 0.15, bottom: 0.98, count: Math.max(1, Math.round(W * H / 13000)) }
+    ];
+    layers.forEach(function (L) {
+      L.clouds = [];
+      for (var i = 0; i < L.count; i++) L.clouds.push(spawn(L, true));
+    });
+  }
+
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min(0.1, (now - last) / 1000); last = now;
+    ctx.drawImage(sky, 0, 0);
+    layers.forEach(function (L) {
+      ctx.globalAlpha = L.alpha;
+      for (var i = 0; i < L.clouds.length; i++) {
+        var c = L.clouds[i];
+        if (!reduceMotion) c.x -= c.v * dt;
+        if (c.x < -c.spr.width - 2) L.clouds[i] = c = spawn(L, false);
+        ctx.drawImage(c.spr, Math.round(c.x), c.y);
+      }
+    });
+    ctx.globalAlpha = 1;
+    requestAnimationFrame(frame);
+  }
+
+  var rt;
+  window.addEventListener("resize", function () { clearTimeout(rt); rt = setTimeout(layout, 80); });
+  layout();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
